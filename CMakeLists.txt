@@ -17,6 +17,6 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(raylib)
 
-add_executable(snake src/main.cpp)
+add_executable(snake WIN32 src/main.cpp)
 target_link_libraries(snake PRIVATE raylib)
 

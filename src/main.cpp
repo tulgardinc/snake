@@ -1,29 +1,40 @@
 #include "raylib.h"
-#include <iostream>
 #include <memory>
+#include <queue>
 #include <random>
+#include <string>
 
 enum Direction { UP, RIGHT, DOWN, LEFT, NONE };
+enum Screens { GAME, END };
 
 struct SnakeNode {
-  Vector2 pos;
-  Direction direction;
+  Vector2 gridPos;
+  Vector2 targetGridPos;
   std::unique_ptr<SnakeNode> previous;
 };
 
-void updateNodePosition(SnakeNode &node) {
-  switch (node.direction) {
+Vector2 getNodePos(SnakeNode &node, float normalizedTime) {
+  return Vector2{
+      (1 - normalizedTime) * node.gridPos.x +
+          normalizedTime * node.targetGridPos.x,
+      (1 - normalizedTime) * node.gridPos.y +
+          normalizedTime * node.targetGridPos.y,
+  };
+}
+
+void setHeadTarget(SnakeNode &head, Direction dir) {
+  switch (dir) {
   case UP:
-    node.pos.y--;
+    head.targetGridPos.y--;
     break;
   case RIGHT:
-    node.pos.x++;
+    head.targetGridPos.x++;
     break;
   case DOWN:
-    node.pos.y++;
+    head.targetGridPos.y++;
     break;
   case LEFT:
-    node.pos.x--;
+    head.targetGridPos.x--;
     break;
   case NONE:
     break;
@@ -36,7 +47,22 @@ Vector2 getRandomFoodPosition(std::uniform_int_distribution<int> &distX,
   return Vector2{(float)distX(gen), (float)distY(gen)};
 }
 
-int main() {
+SnakeNode initializeSnake(int gridWidth, int gridHeight) {
+  float halfWidth = gridWidth / 2;
+  float halfHeight = gridHeight / 2;
+  SnakeNode lastNode =
+      SnakeNode{halfWidth - 2, halfHeight, halfWidth - 1, halfHeight, nullptr};
+
+  lastNode.previous = std::make_unique<SnakeNode>(
+      SnakeNode{halfWidth - 1, halfHeight, halfWidth, halfHeight, nullptr});
+
+  lastNode.previous->previous = std::make_unique<SnakeNode>(
+      SnakeNode{halfWidth, halfHeight, halfWidth + 1, halfHeight, nullptr});
+
+  return std::move(lastNode);
+}
+
+int WinMain() {
   const int SCREEN_WIDTH = 1200;
   const int SCREEN_HEIGHT = 650;
   const int GRID_WIDTH = 25;
@@ -47,102 +73,192 @@ int main() {
   const int SCENE_HEIGHT = GRID_HEIGHT * CELL_HEIGHT;
   const float SCENE_LEFT = -(SCENE_WIDTH / 2.0f);
   const float SCENE_TOP = -(SCENE_HEIGHT / 2.0f);
+  const float INITIAL_TURN_DURATION = 0.20f;
+  const float DURATION_RATIO = 0.9f;
+
+  const Vector2 BASE_OFFSET =
+      Vector2{SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f};
 
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_int_distribution<int> distX(0, GRID_WIDTH - 1);
   std::uniform_int_distribution<int> distY(0, GRID_HEIGHT - 1);
 
-  float turnDuration = 0.3f;
+  std::queue<Direction> inputQueue;
+
+  float turnDuration = INITIAL_TURN_DURATION;
   float timer = 0;
+  int score = 0;
+  Screens currentScreen = Screens::GAME;
 
-  std::unique_ptr<SnakeNode> nextToSpawn = nullptr;
-
-  SnakeNode lastNode =
-      SnakeNode{GRID_WIDTH / 2 - 2, GRID_HEIGHT / 2, Direction::RIGHT, nullptr};
-
-  lastNode.previous = std::make_unique<SnakeNode>(SnakeNode{
-      GRID_WIDTH / 2 - 1, GRID_HEIGHT / 2, Direction::RIGHT, nullptr});
-
-  lastNode.previous->previous = std::make_unique<SnakeNode>(
-      SnakeNode{GRID_WIDTH / 2, GRID_HEIGHT / 2, Direction::RIGHT, nullptr});
-
+  SnakeNode lastNode = initializeSnake(GRID_WIDTH, GRID_HEIGHT);
   SnakeNode *headNode = lastNode.previous->previous.get();
 
   Vector2 foodPos = getRandomFoodPosition(distX, distY, gen);
+  Direction headNodeDirection = Direction::RIGHT;
 
   InitWindow(SCREEN_WIDTH, SCREEN_HEIGHT, "snake");
 
   SetTargetFPS(166);
 
   Camera2D camera;
-  camera.offset = Vector2{SCREEN_WIDTH / 2.0f, SCREEN_HEIGHT / 2.0f};
+  camera.offset = BASE_OFFSET;
   camera.rotation = 0;
   camera.zoom = 1;
 
   while (!WindowShouldClose()) {
-    // Update
 
-    if (IsKeyPressed(KEY_A) && headNode->direction != Direction::RIGHT) {
-      headNode->direction = Direction::LEFT;
-    } else if (IsKeyPressed(KEY_D) && headNode->direction != Direction::LEFT) {
-      headNode->direction = Direction::RIGHT;
-    } else if (IsKeyPressed(KEY_W) && headNode->direction != Direction::DOWN) {
-      headNode->direction = Direction::UP;
-    } else if (IsKeyPressed(KEY_S) && headNode->direction != Direction::UP) {
-      headNode->direction = Direction::DOWN;
-    }
+    if (currentScreen == Screens::GAME) {
 
-    if (timer < turnDuration) {
-      timer += GetFrameTime();
-    } else {
-      updateNodePosition(*headNode);
-
-      if (headNode->pos.x > SCENE_WIDTH || headNode->pos.x < 0 ||
-          headNode->pos.y < 0 || headNode->pos.y > SCENE_HEIGHT) {
-        std::cout << "FAILED GAME" << std::endl;
-      }
-
-      SnakeNode *currentNode = &lastNode;
-      while (currentNode->previous) {
-        if (headNode->pos.x == currentNode->pos.x &&
-            headNode->pos.y == currentNode->pos.y) {
-          std::cout << "FAILED GAME" << std::endl;
+      // Update
+      if (inputQueue.size() < 2) {
+        if (IsKeyPressed(KEY_A)) {
+          inputQueue.push(Direction::LEFT);
+        } else if (IsKeyPressed(KEY_D)) {
+          inputQueue.push(Direction::RIGHT);
+        } else if (IsKeyPressed(KEY_W)) {
+          inputQueue.push(Direction::UP);
+        } else if (IsKeyPressed(KEY_S)) {
+          inputQueue.push(Direction::DOWN);
         }
-        updateNodePosition(*currentNode);
-        currentNode->direction = currentNode->previous->direction;
-        currentNode = currentNode->previous.get();
       }
 
-      if (headNode->pos.x == foodPos.x && headNode->pos.y == foodPos.y) {
-        lastNode = SnakeNode{lastNode.pos.x, lastNode.pos.y, Direction::NONE,
-                             std::make_unique<SnakeNode>(std::move(lastNode))};
-        foodPos = getRandomFoodPosition(distX, distY, gen);
-        turnDuration *= 0.9f;
-      }
+      if (timer < turnDuration) {
+        timer += GetFrameTime();
+      } else {
+        headNode->gridPos = headNode->targetGridPos;
 
-      timer = 0;
+        SnakeNode *currentNode = &lastNode;
+        while (currentNode->previous) {
+          currentNode->gridPos = currentNode->targetGridPos;
+          if (headNode->gridPos.x == currentNode->gridPos.x &&
+              headNode->gridPos.y == currentNode->gridPos.y) {
+            currentScreen = Screens::END;
+          }
+          currentNode->targetGridPos = currentNode->previous->targetGridPos;
+          currentNode = currentNode->previous.get();
+        }
+
+        if (headNode->gridPos.x == foodPos.x &&
+            headNode->gridPos.y == foodPos.y) {
+          lastNode =
+              SnakeNode{lastNode.gridPos.x, lastNode.gridPos.y,
+                        lastNode.gridPos.x, lastNode.gridPos.y,
+                        std::make_unique<SnakeNode>(std::move(lastNode))};
+          foodPos = getRandomFoodPosition(distX, distY, gen);
+          score++;
+          turnDuration *= DURATION_RATIO;
+        }
+
+        if (!inputQueue.empty()) {
+          Direction front = inputQueue.front();
+          if (!(headNodeDirection == Direction::UP &&
+                front == Direction::DOWN) &&
+              !(headNodeDirection == Direction::RIGHT &&
+                front == Direction::LEFT) &&
+              !(headNodeDirection == Direction::DOWN &&
+                front == Direction::UP) &&
+              !(headNodeDirection == Direction::LEFT &&
+                front == Direction::RIGHT)) {
+            headNodeDirection = front;
+          }
+          inputQueue.pop();
+        }
+
+        setHeadTarget(*headNode, headNodeDirection);
+
+        if (headNode->targetGridPos.x > GRID_WIDTH - 1 ||
+            headNode->targetGridPos.x < 0 || headNode->targetGridPos.y < 0 ||
+            headNode->targetGridPos.y > GRID_HEIGHT - 1) {
+          currentScreen = Screens::END;
+        }
+
+        timer = 0;
+      }
+    } else {
+      if (IsKeyPressed(KEY_R)) {
+        turnDuration = INITIAL_TURN_DURATION;
+        timer = 0;
+        score = 0;
+
+        lastNode = initializeSnake(GRID_WIDTH, GRID_HEIGHT);
+        headNode = lastNode.previous->previous.get();
+        headNodeDirection = Direction::RIGHT;
+
+        inputQueue = {};
+        currentScreen = Screens::GAME;
+      }
     }
 
     // Drawing
     BeginDrawing();
-    ClearBackground(RAYWHITE);
-    BeginMode2D(camera);
 
-    DrawRectangleLinesEx(
-        Rectangle{SCENE_LEFT, SCENE_TOP, SCENE_WIDTH, SCENE_HEIGHT}, 3.0f,
-        BLACK);
+    switch (currentScreen) {
+    case GAME:
+      ClearBackground(RAYWHITE);
+      BeginMode2D(camera);
 
-    SnakeNode *currentNode = &lastNode;
-    while (currentNode) {
-      DrawRectangle(SCENE_LEFT + currentNode->pos.x * CELL_WIDTH,
-                    SCENE_TOP + currentNode->pos.y * CELL_HEIGHT, CELL_WIDTH,
-                    CELL_HEIGHT, GREEN);
-      currentNode = currentNode->previous.get();
+      for (int i = 0; i < GRID_HEIGHT; i++) {
+        for (int j = 0; j < GRID_WIDTH; j++) {
+          DrawRectangleRounded(Rectangle{SCENE_LEFT + j * CELL_WIDTH + 3,
+                                         SCENE_TOP + i * CELL_HEIGHT + 3,
+                                         CELL_WIDTH - 6, CELL_HEIGHT - 6},
+                               0.3f, 5, Color{242, 242, 242, 255});
+        }
+      }
+
+      DrawRectangleLinesEx(Rectangle{SCENE_LEFT - 3, SCENE_TOP - 3,
+                                     SCENE_WIDTH + 6, SCENE_HEIGHT + 6},
+                           3.0f, BLACK);
+      {
+        SnakeNode *currentNode = &lastNode;
+        while (currentNode) {
+          Vector2 pos = getNodePos(*currentNode, timer / turnDuration);
+          DrawRectangle(SCENE_LEFT + pos.x * CELL_WIDTH,
+                        SCENE_TOP + pos.y * CELL_HEIGHT, CELL_WIDTH,
+                        CELL_HEIGHT, GREEN);
+          currentNode = currentNode->previous.get();
+        }
+      }
+
+      DrawCircle(SCENE_LEFT + foodPos.x * CELL_WIDTH + CELL_WIDTH / 2,
+                 SCENE_TOP + foodPos.y * CELL_HEIGHT + CELL_HEIGHT / 2, 10,
+                 RED);
+
+      DrawText(("Score: " + std::to_string(score * 10)).c_str(),
+               -SCREEN_WIDTH / 2 + 20, -SCREEN_HEIGHT / 2 + 20, 20, BLACK);
+      break;
+    case END:
+
+      ClearBackground(BLACK);
+      BeginMode2D(camera);
+
+      DrawRectangleLinesEx(Rectangle{SCENE_LEFT - 3, SCENE_TOP - 3,
+                                     SCENE_WIDTH + 6, SCENE_HEIGHT + 6},
+                           3.0f, RAYWHITE);
+
+      int textWidth =
+          MeasureText(("Score: " + std::to_string(score * 10)).c_str(), 30);
+
+      DrawText(("Score: " + std::to_string(score * 10)).c_str(), -textWidth / 2,
+               50, 30, RAYWHITE);
+
+      {
+        SnakeNode *currentNode = &lastNode;
+        while (currentNode) {
+          Vector2 pos = getNodePos(*currentNode, timer / turnDuration);
+          DrawRectangle(SCENE_LEFT + pos.x * CELL_WIDTH,
+                        SCENE_TOP + pos.y * CELL_HEIGHT, CELL_WIDTH,
+                        CELL_HEIGHT, RAYWHITE);
+          currentNode = currentNode->previous.get();
+        }
+      }
+
+      int textRestartWidth = MeasureText("R to Restart", 45);
+
+      DrawText("R to Restart", -textRestartWidth / 2, 120, 45, RAYWHITE);
+      break;
     }
-
-    DrawCircle(SCENE_LEFT + foodPos.x * CELL_WIDTH + CELL_WIDTH / 2,
-               SCENE_TOP + foodPos.y * CELL_HEIGHT + CELL_HEIGHT / 2, 10, RED);
 
     EndMode2D();
     EndDrawing();
